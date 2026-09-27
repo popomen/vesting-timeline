@@ -1,0 +1,67 @@
+# 真实数据一律不入库：默认数据目录、任何带 private 标记的数据文件
+data/
+*.private.*
+*.local.*
+
+# 原始授予材料、系统导出和单独生成的真实数据
+# 原始材料仍应保存在仓库外；这些规则用于防止误加入 Git。
+*.pdf
+GrantRecord_*
+SigningRecord_*
+/awards_pdf/
+/fulltext/
+/.textcache/
+/pending*.txt
+/pending*.csv
+/system_award_list*.csv
+/awards.json
+/awards-timeline.json
+/awards_summary.csv
+/vesting_schedule.csv
+/prior_awards.csv
+/signatures.csv
+/proposed_award_schedules.csv
+
+# 本机凭证、证书和可能含有请求或身份信息的诊断产物
+/private/
+/secrets/
+.secrets/
+/credentials/
+/auth.json
+/credentials.json
+/credentials.txt
+/logs/
+*.pem
+*.key
+*.p12
+*.pfx
+*.keystore
+*.log
+*.har
+*.pcap
+*.pcapng
+
+# 管线中间产物与构建产物（prepare.py 默认写 .work/，单文件构建产物也只应本地使用）
+.work/
+*.standalone.html
+.*.tmp
+
+# 编辑器 / 系统噪音
+.DS_Store
+*.swp
+
+# Cloudflare tooling and machine-local deployment configuration
+node_modules/
+.wrangler/
+.dev.vars*
+!.dev.vars.example
+.env*
+!.env.example
+wrangler.local.json
+
+# CloudBase machine-local configuration / logs
+cloudbaserc.json
+cloudbaserc.jsonc
+cloudbaserc.local.json
+.cloudbase/
+.cloudbase-backup/

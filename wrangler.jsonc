@@ -1,0 +1,20 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "vesting-timeline",
+  "main": "cloudflare/worker.mjs",
+  "compatibility_date": "2026-09-27",
+  "workers_dev": true,
+  "preview_urls": false,
+  "assets": {
+    "directory": ".work/cloudflare/assets",
+    "binding": "ASSETS",
+    "run_worker_first": true,
+    "not_found_handling": "none"
+  },
+  "observability": { "enabled": false },
+  "vars": {
+    "TEAM_DOMAIN": "",
+    "POLICY_AUD": "",
+    "ALLOWED_EMAIL": ""
+  }
+}

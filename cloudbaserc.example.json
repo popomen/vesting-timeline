@@ -1,0 +1,18 @@
+{
+  "envId": "REPLACE_WITH_FREE_ENV_ID",
+  "region": "ap-shanghai",
+  "functionRoot": ".work/cloudbase/functions",
+  "functions": [
+    {
+      "name": "vesting",
+      "runtime": "Nodejs20.19",
+      "handler": "index.main",
+      "timeout": 3,
+      "memorySize": 256,
+      "installDependency": false,
+      "envVariables": {
+        "DASHBOARD_PASSWORD_SHA256": ""
+      }
+    }
+  ]
+}
