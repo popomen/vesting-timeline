@@ -297,6 +297,10 @@ var state = { dola: true, option: true, past: true, future: true, mergeDays: 7,
     for (var y = X0.getFullYear(); y <= X1.getFullYear(); y++) out.push(new Date(y, 0, 1));
     return out;
   }
+  // 自然季度共享时间轴坐标；季度宽度反映真实天数（包含闰年）。
+  var quarters = d3.timeMonth.every(3).range(X0, X1).map(function (start) {
+    return { start: start, end: d3.timeMonth.offset(start, 3), number: start.getMonth() / 3 + 1 };
+  });
 
   // 线性时间轴：密度取理论下限 —— 同排任意相邻两球，水平距离 ≥ 两球半径之和（刚好相切，不加余量）。
   // 时间刻度与日期严格等比，代价是整段跨度需要横向滚动。
@@ -375,11 +379,14 @@ var state = { dola: true, option: true, past: true, future: true, mergeDays: 7,
     var maxCumR = Math.max(todayMaxR, selectedMaxR);
     var cumCy = Math.ceil(maxCumR + 30);
     var lineLabelY = Math.ceil(cumCy + maxCumR + 24);
-    var m = { top: Math.max(116, lineLabelY + 46), right: 20, bottom: 46 };
-    var H = m.top + ORDER.length * laneH + m.bottom;
+    var m = { top: Math.max(116, lineLabelY + 46), right: 20, bottom: 72 };
+    var plotBottom = m.top + ORDER.length * laneH;
+    var H = plotBottom + m.bottom;
     var totalDays = (X1 - X0) / 86400000;
     var availW = Math.max(260, (host.clientWidth || 736) - labelW) - m.right;
-    var pxPerDay = Math.max(minPxPerDay(), availW / totalDays);
+    // 即使大幅合并气泡，每季仍留足空间显示 Q1–Q4，窄屏通过横向滚动查看。
+    var minQuarterDays = d3.min(quarters, function (q) { return (q.end - q.start) / 86400000; });
+    var pxPerDay = Math.max(minPxPerDay(), availW / totalDays, 30 / minQuarterDays);
     var plotW = Math.round(totalDays * pxPerDay) + m.right;
     var W = plotW;
     var x = d3.scaleTime().domain([X0, X1]).range([0, plotW - m.right]);
@@ -408,6 +415,14 @@ var state = { dola: true, option: true, past: true, future: true, mergeDays: 7,
     wrap.appendChild(labelSvg);
     wrap.appendChild(scroll);
     host.appendChild(wrap);
+    quarters.forEach(function (q) {
+      var left = x(q.start), right = x(q.end);
+      g.appendChild(el('rect', {
+        class: 'quarter-band ' + (q.number % 2 ? 'quarter-even' : 'quarter-odd'),
+        x: left, y: m.top - 8, width: right - left, height: plotBottom + 28 - (m.top - 8),
+        'aria-hidden': 'true'
+      }));
+    });
     g.appendChild(el('rect', { class: 'past-wash', x: 0, y: m.top,
       width: Math.max(0, Math.min(W - m.right, x(TODAY))), height: ORDER.length * laneH }));
     var labelRows = [], plotRows = [], hoveredRow = -1;
@@ -457,12 +472,24 @@ var state = { dola: true, option: true, past: true, future: true, mergeDays: 7,
       render();
     });
 
+    quarters.forEach(function (q) {
+      var left = x(q.start), right = x(q.end);
+      // Q1 沿用年度边界，避免在同一位置叠画两条线。
+      if (q.number !== 1) {
+        g.appendChild(el('line', { class: 'quarter-grid', x1: left, x2: left,
+          y1: m.top - 8, y2: plotBottom + 28, 'aria-hidden': 'true' }));
+      }
+      var label = el('text', { class: 'quarter-label', x: (left + right) / 2,
+        y: plotBottom + 19, 'text-anchor': 'middle' }, 'Q' + q.number);
+      label.appendChild(el('title', {}, q.start.getFullYear() + ' 年 Q' + q.number));
+      g.appendChild(label);
+    });
     yearTicks().forEach(function (t) {
       var gx = x(t);
-      g.appendChild(el("line", { class: "grid", x1: gx, x2: gx, y1: m.top - 8, y2: m.top + ORDER.length * laneH }));
+      g.appendChild(el("line", { class: "grid year-grid", x1: gx, x2: gx, y1: m.top - 8, y2: plotBottom + 28 }));
       var anchor = gx < 24 ? "start" : (gx > W - m.right - 24 ? "end" : "middle");
-      g.appendChild(el("text", { class: "tick", x: gx + (anchor === "start" ? 4 : anchor === "end" ? -4 : 0),
-                                 y: H - 18, "text-anchor": anchor }, t.getFullYear()));
+      g.appendChild(el("text", { class: "tick year-label", x: gx + (anchor === "start" ? 4 : anchor === "end" ? -4 : 0),
+                                 y: plotBottom + 45, "text-anchor": anchor }, t.getFullYear()));
     });
     g.appendChild(el("text", { class: "axis-title", "data-axis": "x", x: (W - m.right) / 2, y: H - 4,
                                "text-anchor": "middle" }, "归属日期（线性轴）"));

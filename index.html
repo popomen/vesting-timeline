@@ -12,6 +12,7 @@
       --accent: #3064cf; --accent-soft: #e8efff;
       --viz-series-1: #417ce5; --viz-series-2: #b57b35; --orange: #9a7242;
       --row-hover: #eaf0f9; --past-wash: #edf1f7; --label-bg: #fafbfc;
+      --quarter-even: #f9fafc; --quarter-odd: #e6ebf3;
       --shadow: 0 2px 5px #20263206, 0 20px 60px #20263205;
       --background: var(--panel); --foreground: var(--fg); --muted: var(--panel-2);
       --muted-foreground: var(--fg-muted); --border: var(--line);
@@ -24,6 +25,7 @@
         --accent: #91b5ff; --accent-soft: #27354f;
         --viz-series-1: #8baef0; --viz-series-2: #d9b17c; --orange: #cfb28c;
         --row-hover: #252d3a; --past-wash: #222832; --label-bg: #1c2028;
+        --quarter-even: #1c2028; --quarter-odd: #2b3442;
         --shadow: 0 2px 5px #00000010, 0 24px 64px #00000014;
       }
     }
@@ -115,6 +117,12 @@
     #award-viz svg text.tick { fill: var(--fg-muted); font-size: 11px; }
     #award-viz svg text.axis-title { fill: var(--fg-muted); font-size: 10px; letter-spacing: .07em; }
     #award-viz line.grid { stroke: var(--line); stroke-width: 1; stroke-dasharray: 2 5; opacity: .7; }
+    #award-viz .quarter-band, #award-viz .quarter-grid, #award-viz .year-grid, #award-viz .quarter-label, #award-viz .year-label { pointer-events: none; }
+    #award-viz .quarter-even { fill: var(--quarter-even); }
+    #award-viz .quarter-odd { fill: var(--quarter-odd); }
+    #award-viz line.quarter-grid { stroke: var(--line); stroke-width: 1; opacity: .85; }
+    #award-viz line.year-grid { stroke: var(--fg-muted); stroke-width: 1; stroke-dasharray: 3 4; opacity: .45; }
+    #award-viz svg text.quarter-label { fill: var(--fg-muted); font-size: 10px; letter-spacing: .04em; }
     #award-viz .lane-line { stroke: var(--line); stroke-width: 1; opacity: .5; }
     #award-viz .today line { stroke: var(--orange); stroke-width: 1; }
     #award-viz .today text { fill: var(--orange); font-size: 10px; }
@@ -260,10 +268,11 @@
 
     <div class="chart-caption"><div class="chart-title">归属时间线 <span>VESTING TIMELINE</span></div><div id="hint" class="hint" role="status"></div></div>
     <div id="tl-host"></div>
-    <div class="chart-footer"><div class="legend-inline"><span><i class="swatch solid"></i>实心 · 已归属</span><span><i class="swatch hollow"></i>空心 · 待归属</span><span>灰色分片 · 契约修订</span></div><span>气泡面积与数量 / 金额成正比 · 可横向滚动</span></div>
+    <div class="chart-footer"><div class="legend-inline"><span><i class="swatch solid"></i>实心 · 已归属</span><span><i class="swatch hollow"></i>空心 · 待归属</span><span>灰色分片 · 契约修订</span><span>底纹交替 · 自然季度</span></div><span>气泡面积与数量 / 金额成正比 · 可横向滚动</span></div>
     <p class="sr-only">
       时间线按授予记录逐行展开，行标签为「授予日期 + 授予原因」；每个圆圈是一期归属，实心为已归属、空心为待归属，
       面积与数量成正比（受契约修订影响的期次为灰顶/原色底的分片）。
+      绘图区底纹按自然季度交替，Q1 至 Q4 分别对应 1 至 3 月、4 至 6 月、7 至 9 月、10 至 12 月；年度边界用较深网格线区分，年份显示在季度标签下方。
       顶部可切换类型与状态、设置合并天数 N、切换气泡体积口径（股数 / 回购价）。
       在绘图区点击今天右侧的任意位置可查看该日期的累计归属。
     </p>
