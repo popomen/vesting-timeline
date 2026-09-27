@@ -5,6 +5,36 @@
  *   ?data=<路径>        指定数据文件（默认 data/awards-timeline.json）
  *   ?today=YYYY-MM-DD   指定"今天"（默认取本机当天，用于区分已归属/待归属）
  */
+
+// 使用原始逐期计划汇总，独立于图表筛选、气泡合并和金额显示口径。
+function summarizeNextVesting(tranches, today) {
+  var upcoming = tranches.filter(function (t) {
+    return t[0] >= today && (t[4] === 'tranche' || t[4] === 'ptranche') &&
+      (t[2] === 'dola' || t[2] === 'option') && Number.isFinite(t[3]) && t[3] > 0;
+  });
+  if (!upcoming.length) return null;
+  var date = upcoming.reduce(function (earliest, t) {
+    return t[0] < earliest ? t[0] : earliest;
+  }, upcoming[0][0]);
+  var effective = { dola: 0, option: 0 }, proposed = { dola: 0, option: 0 };
+  var awards = new Set();
+  upcoming.forEach(function (t) {
+    if (t[0] !== date) return;
+    var totals = t[4] === 'ptranche' ? proposed : effective;
+    totals[t[2]] += t[3];
+    awards.add(t[1]);
+  });
+  return {
+    date: date,
+    // 用日历日期计算天数，避免本地夏令时带来的 23/25 小时差异。
+    daysUntil: Math.round((Date.parse(date + 'T00:00:00Z') - Date.parse(today + 'T00:00:00Z')) / 86400000),
+    awardCount: awards.size,
+    effective: effective,
+    proposed: proposed,
+    total: { dola: effective.dola + proposed.dola, option: effective.option + proposed.option }
+  };
+}
+
 (function () {
   'use strict';
   var root = document.getElementById('award-viz');
@@ -23,6 +53,8 @@
   function fail(msg) {
     var host = document.getElementById('tl-host');
     if (host) host.textContent = '';
+    var nextCard = document.getElementById('next-vesting');
+    if (nextCard) nextCard.hidden = true;
     showNote(msg);
   }
 
@@ -161,6 +193,41 @@ var state = { dola: true, option: true, past: true, future: true, mergeDays: 7,
   function unit(cat) { return cat === "dola" ? "份" : "股"; }
   function money(n) { return fmt(n); }
   function catName(cat) { return cat === "dola" ? "豆包股" : "期权"; }
+  function renderNextVesting() {
+    var card = document.getElementById('next-vesting');
+    if (!card) return;
+    var today = d3.timeFormat('%Y-%m-%d')(TODAY);
+    var next = summarizeNextVesting(ALL, today);
+    var dateEl = document.getElementById('next-vesting-date');
+    var countdown = document.getElementById('next-vesting-countdown');
+    var proposedEl = document.getElementById('next-vesting-proposed');
+    document.getElementById('next-vesting-title').textContent = next && next.daysUntil === 0 ? '今天归属' : '下次归属';
+    document.getElementById('next-vesting-when').hidden = !next;
+    dateEl.hidden = !next;
+    countdown.hidden = !next;
+    document.getElementById('next-vesting-amounts').hidden = !next;
+    document.getElementById('next-vesting-empty').hidden = !!next;
+    proposedEl.hidden = true;
+    if (next) {
+      dateEl.dateTime = next.date;
+      dateEl.textContent = d3.timeFormat('%Y 年 %-m 月 %-d 日')(parse(next.date));
+      countdown.textContent = next.daysUntil === 0 ? '就是今天' : '还有 ' + next.daysUntil + ' 天';
+      ['dola', 'option'].forEach(function (cat) {
+        document.getElementById('next-vesting-' + cat).textContent = money(next.total[cat]);
+      });
+      document.getElementById('next-vesting-note').textContent = '全部授予 · 当天共 ' + next.awardCount + ' 笔 · 按逐期日期汇总';
+      var pending = ['dola', 'option'].filter(function (cat) { return next.proposed[cat] > 0; });
+      if (pending.length) {
+        proposedEl.textContent = '以上合计含拟授予：' + pending.map(function (cat) {
+          return catName(cat) + ' ' + money(next.proposed[cat]) + ' ' + unit(cat);
+        }).join('、') + '；尚未生效，生效后才计入归属。';
+        proposedEl.hidden = false;
+      }
+    } else {
+      document.getElementById('next-vesting-note').textContent = '全部授予 · 截至 ' + today;
+    }
+    card.hidden = false;
+  }
   function el(tag, attrs, text) {
     var node = document.createElementNS(NS, tag);
     for (var k in attrs) { if (attrs[k] !== null && attrs[k] !== undefined) node.setAttribute(k, attrs[k]); }
@@ -660,6 +727,7 @@ var state = { dola: true, option: true, past: true, future: true, mergeDays: 7,
     });
   }
 
+  renderNextVesting();
   render();
   if (window.ResizeObserver) {
     var raf = null;
