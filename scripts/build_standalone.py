@@ -11,6 +11,7 @@
 import argparse
 import json
 import pathlib
+import re
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
@@ -30,7 +31,8 @@ def main():
 
     payload = json.dumps(data, ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/")
     inline = f'<script id="inline-data" type="application/json">{payload}</script>\n'
-    html = html.replace('<script src="app.js"></script>', inline + "<script>\n" + app + "</script>")
+    html = re.sub(r'<script src="app\.js(?:\?[^"]*)?"></script>',
+                  lambda _: inline + "<script>\n" + app + "</script>", html)
     html = html.replace("<title>", "<!-- 单文件构建：数据已内嵌 -->\n<title>")
     out = pathlib.Path(args.out)
     out.write_text(html, encoding="utf-8")

@@ -93,6 +93,7 @@
     .swatch.option { background: var(--viz-series-2); }
     .swatch.solid { background: var(--fg-muted); }
     .swatch.hollow { background: transparent; box-shadow: inset 0 0 0 1.3px var(--fg-muted); }
+    .swatch.hatched { width: 9px; height: 9px; background: repeating-linear-gradient(135deg, transparent 0 2px, var(--fg-muted) 2px 3px); box-shadow: inset 0 0 0 1px var(--fg-muted); }
     .num { width: 74px; height: 36px; padding: 0 9px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel-2); color: var(--fg); font: inherit; font-size: 12px; font-variant-numeric: tabular-nums; }
     #mergeN { width: 58px; }
     .price-panel { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; width: 100%; padding: 13px 16px; border: 1px solid var(--line); background: var(--accent-soft); border-radius: 9px; }
@@ -131,13 +132,23 @@
     #award-viz .summary-connector { fill: none; stroke: var(--orange); stroke-width: 1; opacity: .65; pointer-events: none; }
     #award-viz .selected .summary-connector { stroke-dasharray: 4 3; }
     #award-viz .date-pill { fill: var(--panel-2); stroke: var(--line); }
+    #award-viz .date-interval { cursor: help; }
+    #award-viz .date-interval rect { fill: var(--panel); }
+    #award-viz .date-interval-calendar { fill: var(--fg); font-size: 11px; font-weight: 550; }
+    #award-viz .date-interval-workdays { fill: var(--fg-muted); font-size: 9px; }
     #award-viz .now-value { fill: var(--fg); font-size: 13px; font-weight: 600; }
+    #award-viz .cat-dola { --mark-color: var(--viz-series-1); }
+    #award-viz .cat-option { --mark-color: var(--viz-series-2); }
     #award-viz .mk-past.cat-dola { fill: var(--viz-series-1); }
     #award-viz .mk-past.cat-option { fill: var(--viz-series-2); }
     #award-viz .mk-future.cat-dola { fill: none; stroke: var(--viz-series-1); stroke-width: 1.5; }
     #award-viz .mk-future.cat-option { fill: none; stroke: var(--viz-series-2); stroke-width: 1.5; }
-    #award-viz .mk-past, #award-viz .mk-future { pointer-events: none; }
-    #award-viz .mk-past[data-tooltip] { pointer-events: auto; cursor: help; }
+    #award-viz .mk-interval { stroke: var(--mark-color); stroke-width: 1; }
+    #award-viz .mk-interval.cat-dola { fill: url(#vesting-hatch-dola); }
+    #award-viz .mk-interval.cat-option { fill: url(#vesting-hatch-option); }
+    #award-viz .mk-past, #award-viz .mk-future, #award-viz .mk-interval { pointer-events: none; }
+    #award-viz .mk-past[data-tooltip], #award-viz .mk-interval[data-tooltip] { pointer-events: auto; cursor: help; }
+    #award-viz .summary-total { stroke: none; }
     #award-viz .mk-cancel-part-past { fill: var(--fg-muted); pointer-events: none; }
     #award-viz .mk-cancel-part-future { fill: none; stroke: var(--fg-muted); stroke-width: 1.5; pointer-events: none; }
     #award-viz .hit { fill: transparent; stroke: none; }
@@ -146,8 +157,10 @@
     #award-viz .lane-name { font-size: 12px; font-weight: 500; }
     #award-viz .lane-date { fill: var(--fg-muted); font-size: 10px; letter-spacing: .03em; }
     #award-viz .lane-badge { fill: var(--fg-muted); font-size: 9px; }
-    #award-viz .lane-bg { fill: transparent; }
-    #award-viz .lane-bg.is-hovered { fill: var(--row-hover); }
+    #award-viz .lane-bg { fill: transparent; transition: fill .14s ease; }
+    #award-viz .lane-label.is-hovered .lane-bg { fill: var(--row-hover); }
+    #award-viz .lane-focus { fill: var(--mark-color); opacity: 0; pointer-events: none; }
+    #award-viz .lane-label.is-hovered .lane-focus { opacity: 1; }
     #award-viz .past-wash { fill: var(--past-wash); opacity: .5; pointer-events: none; }
     #award-viz .tl-wrap { display: flex; align-items: flex-start; }
     #award-viz .tl-wrap > svg { background: var(--label-bg); box-shadow: inset -1px 0 var(--line); max-width: none; flex: 0 0 auto; display: block; }
@@ -224,7 +237,6 @@
     <p id="next-vesting-empty" hidden>当前记录中，今天及以后暂无归属计划。</p>
     <div class="next-vesting-context">
       <p id="next-vesting-note"></p>
-      <p id="next-vesting-proposed" hidden></p>
     </div>
   </section>
 
@@ -268,13 +280,14 @@
 
     <div class="chart-caption"><div class="chart-title">归属时间线 <span>VESTING TIMELINE</span></div><div id="hint" class="hint" role="status"></div></div>
     <div id="tl-host"></div>
-    <div class="chart-footer"><div class="legend-inline"><span><i class="swatch solid"></i>实心 · 已归属</span><span><i class="swatch hollow"></i>空心 · 待归属</span><span>灰色分片 · 契约修订</span><span>底纹交替 · 自然季度</span></div><span>气泡面积与数量 / 金额成正比 · 可横向滚动</span></div>
+    <div class="chart-footer"><div class="legend-inline"><span><i class="swatch solid"></i>实心 · 已归属</span><span><i class="swatch hatched"></i>斜线 · 选中日前新增</span><span><i class="swatch hollow"></i>空心 · 其余待归属</span><span>灰色分片 · 契约修订</span><span>底纹交替 · 自然季度</span></div><span>气泡面积与数量 / 金额成正比 · 可横向滚动</span></div>
     <p class="sr-only">
-      时间线按授予记录逐行展开，行标签为「授予日期 + 授予原因」；每个圆圈是一期归属，实心为已归属、空心为待归属，
+      时间线按授予记录逐行展开，行标签为「授予日期 + 授予原因」；每个圆圈是一期归属，实心为已归属、斜线为今天之后至选中日的新增归属（含选中日）、空心为其余待归属，
       面积与数量成正比（受契约修订影响的期次为灰顶/原色底的分片）。
       绘图区底纹按自然季度交替，Q1 至 Q4 分别对应 1 至 3 月、4 至 6 月、7 至 9 月、10 至 12 月；年度边界用较深网格线区分，年份显示在季度标签下方。
       顶部可切换类型与状态、设置合并天数 N、切换气泡体积口径（股数 / 回购价）。
-      在绘图区点击今天右侧的任意位置可查看该日期的累计归属。
+      在绘图区点击今天右侧的任意位置可查看该日期的累计归属。累计气泡中与外圆左侧相切的实心内圆表示截至今天已归属的部分，向右展开的斜线区域表示今天之后至选中日的增量，两部分面积与各自数量或金额成正比。
+      两个日期标签之间的下方显示相隔的自然天数和工作日数，不含今天、包含选中日。工作日按周一至周五计算，未扣除节假日、不含调休。
     </p>
   </div>
 
@@ -283,6 +296,6 @@
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js"></script>
-<script src="app.js"></script>
+<script src="app.js?v=20261006-interval"></script>
 </body>
 </html>

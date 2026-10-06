@@ -6,22 +6,40 @@
  *   ?today=YYYY-MM-DD   指定"今天"（默认取本机当天，用于区分已归属/待归属）
  */
 
+// 所有导入记录统一视为已授予；保留来源 kind，但不影响归属判断。
+function isVestingTranche(t) {
+  return t[4] === 'tranche' || t[4] === 'ptranche';
+}
+
+// 日历日期按 UTC 计算，避免本地夏令时造成天数偏差；区间不含起始日、包含结束日。
+// 工作日使用周一至周五，不推断未来年份的法定节假日或调休。
+function summarizeDateInterval(start, end) {
+  var startMs = Date.parse(start + 'T00:00:00Z');
+  var calendarDays = Math.max(0, Math.round((Date.parse(end + 'T00:00:00Z') - startMs) / 86400000));
+  var workdays = Math.floor(calendarDays / 7) * 5;
+  var weekday = new Date(startMs).getUTCDay();
+  for (var day = 1; day <= calendarDays % 7; day++) {
+    var dow = (weekday + day) % 7;
+    if (dow > 0 && dow < 6) workdays++;
+  }
+  return { calendarDays: calendarDays, workdays: workdays };
+}
+
 // 使用原始逐期计划汇总，独立于图表筛选、气泡合并和金额显示口径。
 function summarizeNextVesting(tranches, today) {
   var upcoming = tranches.filter(function (t) {
-    return t[0] >= today && (t[4] === 'tranche' || t[4] === 'ptranche') &&
+    return t[0] >= today && isVestingTranche(t) &&
       (t[2] === 'dola' || t[2] === 'option') && Number.isFinite(t[3]) && t[3] > 0;
   });
   if (!upcoming.length) return null;
   var date = upcoming.reduce(function (earliest, t) {
     return t[0] < earliest ? t[0] : earliest;
   }, upcoming[0][0]);
-  var effective = { dola: 0, option: 0 }, proposed = { dola: 0, option: 0 };
+  var total = { dola: 0, option: 0 };
   var awards = new Set();
   upcoming.forEach(function (t) {
     if (t[0] !== date) return;
-    var totals = t[4] === 'ptranche' ? proposed : effective;
-    totals[t[2]] += t[3];
+    total[t[2]] += t[3];
     awards.add(t[1]);
   });
   return {
@@ -29,9 +47,7 @@ function summarizeNextVesting(tranches, today) {
     // 用日历日期计算天数，避免本地夏令时带来的 23/25 小时差异。
     daysUntil: Math.round((Date.parse(date + 'T00:00:00Z') - Date.parse(today + 'T00:00:00Z')) / 86400000),
     awardCount: awards.size,
-    effective: effective,
-    proposed: proposed,
-    total: { dola: effective.dola + proposed.dola, option: effective.option + proposed.option }
+    total: total
   };
 }
 
@@ -170,15 +186,15 @@ function summarizeNextVesting(tranches, today) {
         if (v > REF_VALUE) REF_VALUE = v;
       });
     })();
-    // 某类型在指定日期之前的累计归属：effective = 已生效，proposed = 拟授予（未生效），total = 两者之和
+    // 全部授予按原始归属日期累计，不受来源标记、筛选或合并影响。
     function cumAt(cat, upto) {
-      var eff = 0, prop = 0;
+      var total = 0;
       ALL.forEach(function (t) {
-        if (t[2] !== cat || t[4] === 'cancel') return;
+        if (t[2] !== cat || !isVestingTranche(t)) return;
         if (parse(t[0]) > upto) return;
-        if (t[4] === 'tranche') eff += t[3]; else prop += t[3];
+        total += t[3];
       });
-      return { effective: eff, proposed: prop, total: eff + prop };
+      return { total: total };
     }
     function toggleSelect(d) {
       state.selected = (state.selected === d) ? null : d;
@@ -200,14 +216,12 @@ var state = { dola: true, option: true, past: true, future: true, mergeDays: 7,
     var next = summarizeNextVesting(ALL, today);
     var dateEl = document.getElementById('next-vesting-date');
     var countdown = document.getElementById('next-vesting-countdown');
-    var proposedEl = document.getElementById('next-vesting-proposed');
     document.getElementById('next-vesting-title').textContent = next && next.daysUntil === 0 ? '今天归属' : '下次归属';
     document.getElementById('next-vesting-when').hidden = !next;
     dateEl.hidden = !next;
     countdown.hidden = !next;
     document.getElementById('next-vesting-amounts').hidden = !next;
     document.getElementById('next-vesting-empty').hidden = !!next;
-    proposedEl.hidden = true;
     if (next) {
       dateEl.dateTime = next.date;
       dateEl.textContent = d3.timeFormat('%Y 年 %-m 月 %-d 日')(parse(next.date));
@@ -216,13 +230,6 @@ var state = { dola: true, option: true, past: true, future: true, mergeDays: 7,
         document.getElementById('next-vesting-' + cat).textContent = money(next.total[cat]);
       });
       document.getElementById('next-vesting-note').textContent = '全部授予 · 当天共 ' + next.awardCount + ' 笔 · 按逐期日期汇总';
-      var pending = ['dola', 'option'].filter(function (cat) { return next.proposed[cat] > 0; });
-      if (pending.length) {
-        proposedEl.textContent = '以上合计含拟授予：' + pending.map(function (cat) {
-          return catName(cat) + ' ' + money(next.proposed[cat]) + ' ' + unit(cat);
-        }).join('、') + '；尚未生效，生效后才计入归属。';
-        proposedEl.hidden = false;
-      }
     } else {
       document.getElementById('next-vesting-note').textContent = '全部授予 · 截至 ' + today;
     }
@@ -269,7 +276,7 @@ var state = { dola: true, option: true, past: true, future: true, mergeDays: 7,
     return node;
   }
 
-  // 每笔累计（含拟授予的完整计划）；同类型累计只统计已生效记录，因此今天之前与"已归属"一致
+  // 每笔、同类型和今天的累计统一统计全部授予，排除取消数量。
   var awardCum = {}, catCum = {}, vested = {};
   (function () {
     var byAward = {}, byCat = {}, dates = [];
@@ -277,15 +284,15 @@ var state = { dola: true, option: true, past: true, future: true, mergeDays: 7,
     dates.sort();
     dates.forEach(function (dt) {
       var same = ALL.filter(function (t) { return t[0] === dt; });
-      same.forEach(function (t) { if (t[4] !== "cancel") byAward[t[1]] = (byAward[t[1]] || 0) + t[3]; });
-      same.forEach(function (t) { if (t[4] === "tranche") byCat[t[2]] = (byCat[t[2]] || 0) + t[3]; });
+      same.forEach(function (t) { if (isVestingTranche(t)) byAward[t[1]] = (byAward[t[1]] || 0) + t[3]; });
+      same.forEach(function (t) { if (isVestingTranche(t)) byCat[t[2]] = (byCat[t[2]] || 0) + t[3]; });
       same.forEach(function (t) {
         awardCum[t[1] + "|" + dt] = byAward[t[1]];
-        if (t[4] === "tranche") catCum[t[2] + "|" + dt] = byCat[t[2]];
+        if (isVestingTranche(t)) catCum[t[2] + "|" + dt] = byCat[t[2]];
       });
     });
     ALL.forEach(function (t) {
-      if (t[4] === "tranche" && parse(t[0]) <= TODAY) vested[t[1]] = (vested[t[1]] || 0) + t[3];
+      if (isVestingTranche(t) && parse(t[0]) <= TODAY) vested[t[1]] = (vested[t[1]] || 0) + t[3];
     });
   })();
   var nowByCat = { dola: 0, option: 0 };
@@ -305,18 +312,24 @@ var state = { dola: true, option: true, past: true, future: true, mergeDays: 7,
   // 线性时间轴：密度取理论下限 —— 同排任意相邻两球，水平距离 ≥ 两球半径之和（刚好相切，不加余量）。
   // 时间刻度与日期严格等比，代价是整段跨度需要横向滚动。
 
+  function vestingPhase(date) {
+    if (parse(date) <= TODAY) return 'past';
+    return state.selected && date <= state.selected ? 'interval' : 'future';
+  }
+
   function laneMarks(id) {
     var rows = ALL.filter(function (t) { return t[1] === id; }).map(function (t) {
       return { d: t[0], u: t[3], k: t[4], merged: null };
     });
     var n = state.mergeDays;
     if (!(n > 0)) return rows;
-    // 同一笔授予内，距该组首期不超过 N 天的归属合并为一个气泡（面积相加，位置取最后一期）
+    // 同一笔授予、同一显示状态内合并；不跨今天或选中日，位置取最后一期。
     var events = rows.filter(function (m) { return m.k !== "cancel"; })
                      .sort(function (a, b) { return parse(a.d) - parse(b.d); });
     var groups = [], cur = null;
     events.forEach(function (m) {
-      if (cur && (parse(m.d) - parse(cur[0].d)) / 86400000 <= n) cur.push(m);
+      if (cur && vestingPhase(m.d) === vestingPhase(cur[0].d) &&
+          (parse(m.d) - parse(cur[0].d)) / 86400000 <= n) cur.push(m);
       else { cur = [m]; groups.push(cur); }
     });
     var out = rows.filter(function (m) { return m.k === "cancel"; });
@@ -379,7 +392,7 @@ var state = { dola: true, option: true, past: true, future: true, mergeDays: 7,
     var maxCumR = Math.max(todayMaxR, selectedMaxR);
     var cumCy = Math.ceil(maxCumR + 30);
     var lineLabelY = Math.ceil(cumCy + maxCumR + 24);
-    var m = { top: Math.max(116, lineLabelY + 46), right: 20, bottom: 72 };
+    var m = { top: Math.max(state.selected ? 150 : 116, lineLabelY + (state.selected ? 80 : 46)), right: 20, bottom: 72 };
     var plotBottom = m.top + ORDER.length * laneH;
     var H = plotBottom + m.bottom;
     var totalDays = (X1 - X0) / 86400000;
@@ -408,6 +421,15 @@ var state = { dola: true, option: true, past: true, future: true, mergeDays: 7,
     plotSvg.appendChild(el("title", {}, "每笔授予的归属时间线"));
     var defs = el("defs");
     plotSvg.appendChild(defs);
+    ['dola', 'option'].forEach(function (cat) {
+      var pattern = el('pattern', { id: 'vesting-hatch-' + cat, class: 'cat-' + cat,
+        patternUnits: 'userSpaceOnUse', width: 4, height: 4 });
+      pattern.appendChild(el('rect', { width: 4, height: 4, fill: 'var(--panel)' }));
+      pattern.appendChild(el('rect', { width: 4, height: 4, fill: 'var(--mark-color)', opacity: .06 }));
+      pattern.appendChild(el('path', { d: 'M -1 1 L 1 -1 M 0 4 L 4 0 M 3 5 L 5 3',
+        fill: 'none', stroke: 'var(--mark-color)', 'stroke-width': 1, 'stroke-opacity': .8 }));
+      defs.appendChild(pattern);
+    });
     var clipSeq = 0;
     var g = el("g");
     plotSvg.appendChild(g);
@@ -425,7 +447,7 @@ var state = { dola: true, option: true, past: true, future: true, mergeDays: 7,
     });
     g.appendChild(el('rect', { class: 'past-wash', x: 0, y: m.top,
       width: Math.max(0, Math.min(W - m.right, x(TODAY))), height: ORDER.length * laneH }));
-    var labelRows = [], plotRows = [], hoveredRow = -1;
+    var labelRows = [], hoveredRow = -1;
     function highlightRow(ev) {
       var rect = labelSvg.getBoundingClientRect();
       var index = Math.floor((ev.clientY - rect.top - m.top) / laneH);
@@ -433,19 +455,16 @@ var state = { dola: true, option: true, past: true, future: true, mergeDays: 7,
       if (index === hoveredRow) return;
       if (hoveredRow >= 0) {
         labelRows[hoveredRow].classList.remove('is-hovered');
-        plotRows[hoveredRow].classList.remove('is-hovered');
       }
       hoveredRow = index;
       if (index >= 0) {
         labelRows[index].classList.add('is-hovered');
-        plotRows[index].classList.add('is-hovered');
       }
     }
     wrap.addEventListener('mousemove', highlightRow);
     wrap.addEventListener('mouseleave', function () {
       if (hoveredRow >= 0) {
         labelRows[hoveredRow].classList.remove('is-hovered');
-        plotRows[hoveredRow].classList.remove('is-hovered');
         hoveredRow = -1;
       }
     });
@@ -498,52 +517,49 @@ var state = { dola: true, option: true, past: true, future: true, mergeDays: 7,
     ORDER.forEach(function (id, i) {
       var meta = AWARDS[id];
       var y = m.top + i * laneH + laneH / 2;
-      var plotRow = el('rect', { class: 'lane-bg', x: 0, y: y - laneH / 2, width: W - m.right, height: laneH });
-      g.appendChild(plotRow); plotRows.push(plotRow);
-      var labelRow = el('rect', { class: 'lane-bg', x: 0, y: y - laneH / 2, width: labelW, height: laneH });
-      lg.appendChild(labelRow); labelRows.push(labelRow);
       g.appendChild(el("line", { class: "lane-line", x1: 0, x2: W - m.right, y1: y + laneH / 2, y2: y + laneH / 2 }));
       lg.appendChild(el('line', { class: 'lane-line', x1: 0, x2: labelW, y1: y + laneH / 2, y2: y + laneH / 2 }));
 
       var headTip = id + " · " + meta.label + " · 授予日 " + meta.grant +
                     (meta.exp ? " · 到期日 " + meta.exp : "") +
                     " · 授予 " + money(meta.units) + " " + unit(meta.cat) +
-                    (meta.proposed ? " · 拟授予，尚未生效" : " · 已归属 " + money(vested[id] || 0) + " " + unit(meta.cat)) +
+                    " · 已归属 " + money(vested[id] || 0) + " " + unit(meta.cat) +
                     (meta.amended ? " · " + meta.amended : "");
       var x0 = narrow ? 14 : 24;
-      var labelGroup = el('g', { 'data-tooltip': headTip });
+      var labelGroup = el('g', { class: 'lane-label cat-' + meta.cat, 'data-tooltip': headTip });
       lg.appendChild(labelGroup);
-      labelGroup.appendChild(el('rect', { x: 0, y: y - laneH / 2, width: labelW, height: laneH, fill: 'transparent' }));
+      labelRows.push(labelGroup);
+      labelGroup.appendChild(el('rect', { class: 'lane-bg', x: 0, y: y - laneH / 2, width: labelW, height: laneH }));
+      labelGroup.appendChild(el('rect', { class: 'lane-focus', x: 0, y: y - laneH / 2 + 8,
+        width: 3, height: laneH - 16, rx: 1.5 }));
       labelGroup.appendChild(el('circle', { cx: x0 + 3, cy: y - 6, r: 2.5,
         fill: meta.cat === 'dola' ? 'var(--viz-series-1)' : 'var(--viz-series-2)' }));
       textFit(labelGroup, { class: 'lane-name', x: x0 + 14, y: y - 2 }, meta.label, labelW - x0 - 24);
       labelGroup.appendChild(el('text', { class: 'lane-date', x: x0 + 14, y: y + 14 }, meta.grant));
-      if (meta.proposed && !narrow) labelGroup.appendChild(el('text', { class: 'lane-badge', x: labelW - 22, y: y + 14, 'text-anchor': 'end' }, '拟授予'));
 
       if (!state[meta.cat]) return;
 
       laneMarks(id).forEach(function (t) {
         var d = parse(t.d), u = t.u, kind = t.k;
         var cy = y;
-        var isProp = kind === "ptranche";
-        var past = d <= TODAY;
+        var phase = vestingPhase(t.d), past = phase === 'past';
         if (kind === "cancel") {
           return;   // 取消额已由受修订各期的灰色分片表达，不再单独画叉
         }
-        // 已归属/待归属筛选对所有期次一视同仁（拟授予都在未来，因此关掉"待归属"时会一起隐藏）
+        // 实心、筛选和累计都使用同一归属日期判断。
         if (past && !state.past) return;
         if (!past && !state.future) return;
         var orig = ORIG_PLAN[id + "|" + t.d];
         var split = orig && orig > u;
         var tail = " · 该笔累计 " + money(awardCum[id + "|" + t.d]) + " " + unit(meta.cat) +
-                   (isProp || !catCum[meta.cat + "|" + t.d] ? "" :
+                   (!catCum[meta.cat + "|" + t.d] ? "" :
                      " · " + catName(meta.cat) + "累计 " + money(catCum[meta.cat + "|" + t.d]) + " " + unit(meta.cat));
         var tip = (kind === 'merged'
                     ? '合并归属 · 合计归属 ' + money(u) + ' ' + unit(meta.cat) +
                       ' · 覆盖日期 ' + t.firstDate + ' 至 ' + t.d +
                       ' · 逐期明细：' + t.merged.replace(/；/g, ' · ') + ' · 气泡位置取最后一期'
                     : '本次归属 · 归属日期 ' + t.d + ' · 归属数量 ' + money(u) + ' ' + unit(meta.cat)) +
-                  ' · ' + (meta.proposed ? '拟授予，未生效' : (past ? '已归属' : '待归属')) +
+                  ' · ' + (past ? '已归属' : phase === 'interval' ? '待归属 · 计入选中日前新增' : '待归属') +
                   (split ? " · 原计划 " + money(orig) + " → 修订后 " + money(u) + " " + unit(meta.cat) +
                            "（灰 " + (Math.round((orig - u) * 100) / 100) + " 被取消）" : '') +
                   (state.valueMode ? " · 体积口径：≈" + usd(markValue(meta.cat, u)) + "（" + usd(priceOf(meta.cat)) + "/" + unit(meta.cat) + "）" : "") +
@@ -561,7 +577,7 @@ var state = { dola: true, option: true, past: true, future: true, mergeDays: 7,
           });
         }
         g.appendChild(hitNode);
-        var mkClass = (past && !isProp ? "mk-past" : "mk-future") + " cat-" + meta.cat;
+        var mkClass = 'mk-' + phase + ' cat-' + meta.cat;
         if (split) {
           // 上下分片：上=被取消（灰），下=存续（原色），面积按数值比例
           var frac = (orig - u) / orig;
@@ -597,22 +613,24 @@ var state = { dola: true, option: true, past: true, future: true, mergeDays: 7,
     // 顶部累计读数：股数口径显示份额，回购价口径显示金额（股数 × 单价）
     textFit(lg, { class: "lane-sub", x: narrow ? 14 : 24, y: 36 },
             state.valueMode ? "累计归属金额（USD）" : "累计已归属（份/股）", labelW - (narrow ? 8 : 26) - 12);
-    textFit(lg, { class: 'lane-sub', x: narrow ? 14 : 24, y: 54 }, '今天 · 仅计已生效授予', labelW - 26);
-    if (state.selected) textFit(lg, { class: 'lane-sub', x: narrow ? 14 : 24, y: 72 }, '选中 · 含拟授予计划', labelW - 26);
+    textFit(lg, { class: 'lane-sub', x: narrow ? 14 : 24, y: 54 }, '今天 · 全部授予按日期累计', labelW - 26);
+    if (state.selected) {
+      textFit(lg, { class: 'lane-sub', x: narrow ? 14 : 24, y: 72 }, '选中 · 已归属 + 期间新增', labelW - 26);
+      textFit(lg, { class: 'lane-sub', x: narrow ? 14 : 24, y: 96 }, '实心内圆 · 截至今天已归属', labelW - 26);
+      textFit(lg, { class: 'lane-sub', x: narrow ? 14 : 24, y: 114 }, '斜线区域 · 选中日前新增', labelW - 26);
+    }
     [["dola", tgx - 8, -1], ["option", tgx + 8, 1]].forEach(function (spec) {
       var cat = spec[0];
       if (!state[cat]) return;
       var r = radius(nowByCat[cat], cat);
       var cx = spec[1] + spec[2] * r, cy = cumCy;
-      var pendingUnits = ALL.reduce(function (s, t) { return s + (t[2] === cat && t[4] === "ptranche" ? t[3] : 0); }, 0);
       todaySummary.appendChild(el("circle", { class: "mk-past cat-" + cat, cx: cx, cy: cy, r: r,
                                    "data-tooltip": catName(cat) + " · 截至今天" +
                                                    (state.valueMode
                                                      ? "累计归属金额 ≈" + usd(markValue(cat, nowByCat[cat])) +
                                                        "（" + money(nowByCat[cat]) + " " + unit(cat) + " × " + usd(priceOf(cat)) + "）"
                                                      : "累计已归属 " + money(nowByCat[cat]) + " " + unit(cat)) +
-                                                   "，仅已生效授予；拟授予另有 " + money(pendingUnits) + " " + unit(cat) + "，未生效" +
-                                                   (state.valueMode && pendingUnits ? "（≈" + usd(markValue(cat, pendingUnits)) + "）" : "") }));
+                                                   " · 全部授予按归属日期累计" }));
       todaySummary.appendChild(el("text", { class: "now-value", x: spec[1], y: cy - maxCumR - 8, "text-anchor": spec[2] < 0 ? 'end' : 'start' },
                        state.valueMode ? usd(markValue(cat, nowByCat[cat])) : money(nowByCat[cat])));
     });
@@ -633,18 +651,27 @@ var state = { dola: true, option: true, past: true, future: true, mergeDays: 7,
         var cat = spec[0];
         if (!state[cat]) return;
         var cum = cumAt(cat, selDate);
-        var r2 = radius(cum.total, cat);
+        var earned = Math.min(nowByCat[cat], cum.total);
+        var increment = Math.max(0, cum.total - earned);
+        var r2 = markValue(cat, cum.total) > 0 ? radius(cum.total, cat) : 0;
         var cx2 = spec[1] + spec[2] * r2, cy2 = cumCy;
-        selectedSummary.appendChild(el("circle", { class: "mk-past cat-" + cat, cx: cx2, cy: cy2, r: r2,
-                                     "data-tooltip": catName(cat) + " · 截至 " + state.selected +
-                                                     (state.valueMode
-                                                       ? " 累计归属金额 ≈" + usd(markValue(cat, cum.total)) +
-                                                         "（" + money(cum.total) + " " + unit(cat) + " × " + usd(priceOf(cat)) + "）"
-                                                       : " 累计归属 " + money(cum.total) + " " + unit(cat)) +
-                                                     "＝已生效 " + money(cum.effective) + " " + unit(cat) +
-                                                     (cum.proposed ? " ＋ 拟授予 " + money(cum.proposed) + " " + unit(cat) +
-                                                                     "（未生效，若生效则计入" +
-                                                                     (state.valueMode ? "，≈" + usd(markValue(cat, cum.proposed)) : "") + "）" : "") }));
+        var summaryTip = catName(cat) + ' · 截至 ' + state.selected +
+          (state.valueMode
+            ? ' 累计归属金额 ≈' + usd(markValue(cat, cum.total)) +
+              '（' + money(cum.total) + ' ' + unit(cat) + ' × ' + usd(priceOf(cat)) + '）'
+            : ' 累计归属 ' + money(cum.total) + ' ' + unit(cat)) +
+          ' · 实心内圆：截至今天已归属 ' + money(earned) + ' ' + unit(cat) +
+          ' · 斜线区域：选中日前新增 ' + money(increment) + ' ' + unit(cat) +
+          ' · 全部授予按归属日期累计';
+        selectedSummary.appendChild(el('circle', { class: 'summary-total mk-' + (increment > 0 ? 'interval' : 'past') + ' cat-' + cat,
+          cx: cx2, cy: cy2, r: r2, 'data-tooltip': summaryTip }));
+        if (earned > 0 && increment > 0) {
+          // 内圆面积 / 总圆面积 = 已归属 / 总量；不能直接用数量比缩放半径。
+          var innerR = r2 * Math.sqrt(earned / cum.total);
+          // 左侧内切：已归属部分靠向过去，新增面积沿时间轴向右展开。
+          selectedSummary.appendChild(el('circle', { class: 'summary-vested mk-past cat-' + cat,
+            cx: cx2 - r2 + innerR, cy: cy2, r: innerR, 'data-tooltip': summaryTip }));
+        }
         selectedSummary.appendChild(el("text", { class: "now-value", x: spec[1], y: cy2 - maxCumR - 8, "text-anchor": spec[2] < 0 ? 'end' : 'start' },
                          state.valueMode ? usd(markValue(cat, cum.total)) : money(cum.total)));
       });
@@ -671,14 +698,35 @@ var state = { dola: true, option: true, past: true, future: true, mergeDays: 7,
       lefts[0] = Math.max(summaryPad, Math.min(canvasW - summaryPad - packedWidth, balancedLeft));
       lefts[1] = lefts[0] + bounds[0].width + summaryGap;
     }
+    var summaryAnchors = [];
     summaries.forEach(function (summary, i) {
       var dx = lefts[i] - bounds[i].left;
+      summaryAnchors.push(summary.anchor + dx);
       summary.node.setAttribute('transform', 'translate(' + dx + ' 0)');
       summary.node.addEventListener('click', function (ev) { ev.stopPropagation(); });
       summary.guide.appendChild(el('path', { class: 'summary-connector',
         d: 'M ' + (summary.anchor + dx) + ' ' + (lineLabelY + 11) +
-           ' V ' + (lineLabelY + 17) + ' L ' + summary.anchor + ' ' + (m.top - 8) }));
+           ' V ' + (lineLabelY + (state.selected ? 54 : 17)) + ' L ' + summary.anchor + ' ' + (m.top - 8) }));
     });
+    if (summaries.length === 2) {
+      var interval = summarizeDateInterval(fmtDate(TODAY), state.selected);
+      // 使用避让后的标签位置居中；引导线在提示下方再接回真实日期坐标。
+      var intervalX = (summaryAnchors[0] + summaryAnchors[1]) / 2;
+      var calendarText = '相隔 ' + money(interval.calendarDays) + ' 个自然天';
+      var workdayText = money(interval.workdays) + ' 工作日 · 周一至周五';
+      var intervalTip = fmtDate(TODAY) + ' 至 ' + state.selected + ' · ' + calendarText +
+        ' · ' + money(interval.workdays) + ' 个工作日' +
+        ' · 不含今天，含选中日 · 工作日按周一至周五计算，未扣除节假日、不含调休';
+      var intervalGroup = el('g', { class: 'date-interval', 'data-tooltip': intervalTip,
+        role: 'img', 'aria-label': intervalTip, tabindex: 0 });
+      intervalGroup.appendChild(el('rect', { x: intervalX - 72, y: lineLabelY + 17, width: 144, height: 34, rx: 5 }));
+      intervalGroup.appendChild(el('text', { class: 'date-interval-calendar', x: intervalX,
+        y: lineLabelY + 30, 'text-anchor': 'middle' }, calendarText));
+      intervalGroup.appendChild(el('text', { class: 'date-interval-workdays', x: intervalX,
+        y: lineLabelY + 45, 'text-anchor': 'middle' }, workdayText));
+      intervalGroup.addEventListener('click', function (ev) { ev.stopPropagation(); });
+      g.appendChild(intervalGroup);
+    }
     // 画布拓宽后再恢复滚动，避免浏览器按旧宽度提前截断原来的位置。
     scroll.scrollLeft = keepScroll === null ? Math.max(0, x(TODAY) - Math.min(240, scroll.clientWidth * 0.6)) : keepScroll;
   }
@@ -699,10 +747,7 @@ var state = { dola: true, option: true, past: true, future: true, mergeDays: 7,
     var hint = document.getElementById('hint');
     if (hint) {
       if (state.selected) {
-        var sd = parse(state.selected);
-        var pd = cumAt('dola', sd).proposed, po = cumAt('option', sd).proposed;
         hint.textContent = '已选中 ' + state.selected +
-          ((pd || po) ? '（累计已含拟授予：豆包股 +' + money(pd) + '、期权 +' + money(po) + '，若生效则计入）' : '') +
           '：点击其他位置切换，点击今天左侧取消';
       } else {
         hint.textContent = '点击今天右侧，查看未来累计 · 点击左侧取消';

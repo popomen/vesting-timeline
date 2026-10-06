@@ -12,7 +12,7 @@ function summarize(rows, today) {
   return JSON.parse(JSON.stringify(context.summarizeNextVesting(rows, today)));
 }
 
-test('finds the earliest upcoming day and sums every award separately by asset and status', () => {
+test('finds the earliest upcoming day and sums every award by asset regardless of legacy status', () => {
   const rows = [
     ['2026-11-01', 'later', 'option', 900, 'tranche'],
     ['2026-10-01', 'a', 'dola', 120, 'tranche'],
@@ -26,8 +26,6 @@ test('finds the earliest upcoming day and sums every award separately by asset a
   const before = structuredClone(rows);
   assert.deepEqual(summarize(rows, '2026-09-27'), {
     date: '2026-10-01', daysUntil: 4, awardCount: 5,
-    effective: { dola: 155, option: 12 },
-    proposed: { dola: 40, option: 3 },
     total: { dola: 195, option: 15 },
   });
   assert.deepEqual(rows, before);
@@ -56,15 +54,14 @@ test('ignores cancellation and zero-quantity events when choosing the next day',
   assert.equal(result.awardCount, 2);
 });
 
-test('keeps a proposed-only next day explicitly separate from effective awards', () => {
+test('counts a legacy proposed-only next day as awarded', () => {
   const result = summarize([
     ['2026-09-28', 'pending', 'dola', 50, 'ptranche'],
     ['2026-10-01', 'effective', 'dola', 100, 'tranche'],
   ], '2026-09-27');
   assert.equal(result.date, '2026-09-28');
-  assert.deepEqual(result.effective, { dola: 0, option: 0 });
-  assert.deepEqual(result.proposed, { dola: 50, option: 0 });
   assert.equal(result.total.dola, 50);
+  assert.deepEqual(Object.keys(result).sort(), ['awardCount', 'date', 'daysUntil', 'total']);
 });
 
 test('returns no event for empty or exhausted schedules', () => {
